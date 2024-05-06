@@ -1,0 +1,473 @@
+---
+title: "Incarceration Trends in the U.S."
+author: "Doan Tran, Isha Narayanan, Jennie Nguyen, Kaylee Ha"
+date: "`r Sys.Date()`"
+output: openintro::lab_report
+---
+
+```{r load-packages, message=FALSE, include=FALSE}
+library(tidyverse)
+library(openintro)
+library(infer)
+library(broom)
+library(lubridate)
+library(tidymodels)
+
+
+incarcerations <- read_csv(file="incarceration_trends.csv", show_col_types = F)
+```
+
+```{r filter data, include=FALSE, message=FALSE}
+#FOR LINEAR MODEL 
+clean_incarcerations <- incarcerations %>%
+  select(year, state, county_name, region, urbanicity, total_pop, black_pop_15to64, white_pop_15to64, division, total_pop, black_jail_pop, white_jail_pop,  black_prison_pop, white_prison_pop) %>%
+  filter(year == "2006") %>%
+  mutate(urbanicity_binary = case_when(   
+           urbanicity == "rural" | urbanicity == "small/mid" ~ "Rural",
+           urbanicity == "suburban" | urbanicity == "urban" ~ "Urban"))
+```
+
+## Introduction
+
+**Codebook**
+
+Variable name     | Description
+----------------- | ------------
+year              | Year
+state             | State Name
+county_name       | County Name
+region            | Region of county (Midwest, Northeast, South, West)
+urbanicity        | Location category of county (rural, small/mid, suburban, urban)
+total_pop         | Population Count, All Ages
+black_pop_16to64  | Black Population Count, Ages 15 to 64
+white_pop_15to64  | White Population Count, Ages 15 to 64
+black_jail_pop    | Jail Population Count, Black
+white_jail_pop    | Jail Population Count, White
+black_prison_pop  | Prison Population Count, Black
+white_prison_pop  | Prison Population Count, White
+urbanicity_binary | Location category of county (rural, urban)
+race              | Proportion of black to white
+Race              | Black and white jail populations
+rvb               | Red and Blue states (2006)
+
+
+**Note**:
+This data set was used in Info201, in that class this data set was used for DYLPR and ggplot practice. In this project we are using completely different methods, such as linear regression and hypothesis testing, to analyze the data. 
+
+**Relevance**:
+The United States has the highest incarceration rate in the world. Since 1970, the incarcerated population in the United States has increased by 700%. Furthermore, there are wide spread racial disparities in mass incarceration in the United States, with black and latinx individuals at the epicenter of the issue. 
+
+**Where the data came from**:
+This data set measures various statistics about incarceration in the United States of America, it includes 153811 rows and 121 columns. The data set came from the Vera Institute of Justice and it was recently updated in 2020 using the the Census of Jails, which records statistics about all jails in the United States in America and is conducted every 5 years since 1970, and the Annual Survey of Jails, which contains data about one-third of jails in America conducted since 1982. 
+
+**Research Questions**:
+We broadly wanted to explore whether race and incarceration are related in the United States of America. Furthermore, we wanted to explore the regional incarceration dynamics of the United States. First, we tested whether the South has a higher jail population. Next, we tested whether or not red states have a higher proportion of black incarcerated individuals. Next, we predicted Black jail population based on various numerical and categorical predictors. Lastly, wanted to see if the relationship between incarceration and race is affected by urbanicity.
+
+
+```{r, include = FALSE, message = FALSE}
+incarcerations %>% ncol()
+
+incarcerations %>% nrow()
+```
+
+## Analysis
+
+### Is it True that the South Region has the Highest Jail Population?
+
+```{r, include = FALSE}
+incarcerations %>%
+  count(region) %>%
+  mutate(prop=n/sum(n))
+```
+
+`Region` variable contains the part of the geography of the United States. Under `Region` there was Midwest, Northeast, South, and West. According to the [Prison Policy Initiative](https://www.prisonpolicy.org/global/2021.html), states in the South have a higher jail population than the rest of the United States. Therefore, we were curious if we could find evidence to support this statement.
+
+The first step is to find the proportion of the jail population in the South region. Since the `Region` contained four different levels, and we are only interested in making inferences about the South. So, it is critical to decoding `Region` as a binary variable called South, that takes the values of yes or no. Now we have the following summary for the percentage of people who are in jail in the South region.
+
+
+```{r, echo = FALSE, message = FALSE}
+# Calculating the proportion of jail population in the South region.
+incarcerations <- incarcerations %>% 
+        mutate( South = ifelse(region == "South", "yes", "no") )
+
+incarcerations %>% 
+  count(South) %>% 
+  mutate(prop=n/sum(n))
+```
+
+Not only that, but we are also interested to find out if our data will provide evidence in the population represented by the sample, in which the proportion of  jail population in the South region is greater than 40%.
+
+And the null hypothesis is the claim that the jail population in the South region is in fact 40% or less than 40%. 
+
+And the alternative hypothesis is the claim of the jail population in the South region is greater than 40%.
+
+Below is a histogram of the simulation-based distribution of the proportion we should expect to see when the null hypothesis is true. By using the option draw from infer that allows us to simulate the null. It is worth noting that, the observed sample proportion of people who were in jail in the South region is 45%, which is shown in a red vertical line. 
+
+
+```{r, echo = FALSE, message = FALSE}
+# The distribution showing the values in the null hypothesis and alternative hypothesis.
+set.seed(156)
+
+null_dist <- incarcerations %>%
+  specify(response = South, success = "yes") %>%
+  hypothesize(null = "point", p = 0.40) %>%
+  generate(reps = 1000, type = "draw") %>%
+  calculate(stat = "prop")
+
+
+obs_prop = 0.45
+
+null_dist %>% visualise(bins = 10)+ 
+  shade_p_value(obs_stat = 0.45, direction = "greater")
+```
+
+
+
+```{r, echo = FALSE,warning = FALSE}
+# Calculating the p-value:
+null_dist %>% 
+  get_p_value(obs_stat = 0.45, direction = "greater")
+```
+
+Since our p-value is super small. Therefore, we can conclude that our data is provided resounding evidence against the null hypothesis. And in favor of the alternative hypothesis. And the data is being sampled from is supporting the statement that there is more than 40% of the jail population of the United States is in the South region.
+
+### Predicting Black Jail Population from Ubanicity, region, and total Black Population
+
+We wanted to see which variables in this data set the Black jail population was closely correlated with. In order to do so, we first visualized the relationship between the black jail population and two other numerical predictor variables. 
+
+**Pairwise plot 1**
+```{r, echo=FALSE, message = FALSE}
+clean_incarcerations %>% select(black_jail_pop, total_pop) %>%
+  filter(total_pop <300000) %>%
+  pairs()
+```
+
+
+This pairwise plot visualizes relationship between the numerical variables: `black_jail_pop` and `total_pop`. 
+
+**Pairwise plot 2**
+```{r, echo=FALSE, message = FALSE}
+clean_incarcerations %>% select(black_jail_pop, black_pop_15to64) %>%
+  filter(black_pop_15to64 <300000) %>%
+  pairs()
+```
+
+
+This pairwise plot visualizes relationship between the numerical variables: `black_jail_pop` and ` black_pop_15to64`. Due to outlines, we filtered the data to only include the `total_pop` variable and the `black_jail_pop` values under 300,000 in the plots. Each model showed a relationship, so we formulated and compared two main effects models using a numerical predictor in each one. 
+
+
+```{r, echo=FALSE, message = FALSE, include = FALSE}
+clean_incarcerations %>% 
+  select(black_jail_pop)%>%
+  na.omit() %>%
+  summarise(SD = sd(black_jail_pop), 
+            mean_inc = mean(black_jail_pop))
+```
+
+
+```{r, echo = FALSE, message = FALSE, include = FALSE}
+# Testing 1 (main effects)
+set.seed(2355)
+incarcerations_split <- initial_split(clean_incarcerations, prop = 0.8)
+
+incarcerations_train <- training(incarcerations_split)
+incarcerations_test <- testing(incarcerations_split)
+
+
+incarcerations_model <- lm(black_jail_pop ~ total_pop + urbanicity_binary + division, data = incarcerations_train) 
+
+tidy(incarcerations_model) %>% select(term, estimate)
+
+glance(incarcerations_model) %>% select(r.squared, adj.r.squared)
+
+incarcerations_pred <- predict(incarcerations_model, newdata = incarcerations_test) %>%
+  bind_cols(incarcerations_test %>% select(black_jail_pop)) %>%
+  rename(pred = ...1)
+rmse(incarcerations_pred, truth = black_jail_pop, estimate = pred)
+```
+
+
+```{r, include = FALSE, message = FALSE, echo = FALSE}
+# Testing 2 main effects 
+set.seed(2355)
+incarcerations_split <- initial_split(clean_incarcerations, prop = 0.8)
+
+incarcerations_train <- training(incarcerations_split)
+incarcerations_test <- testing(incarcerations_split)
+
+
+incarcerations_model <- lm(black_jail_pop ~ black_pop_15to64 + urbanicity_binary + region, data = incarcerations_train) 
+tidy(incarcerations_model) %>% select(term, estimate)
+
+glance(incarcerations_model) %>% select(r.squared, adj.r.squared)
+
+incarcerations_pred <- predict(incarcerations_model, newdata = incarcerations_test) %>%
+  bind_cols(incarcerations_test %>% select(black_jail_pop)) %>%
+  rename(pred = ...1)
+rmse(incarcerations_pred, truth = black_jail_pop, estimate = pred)
+```
+
+
+```{r, include = FALSE, echo = FALSE}
+# Testing 2(interaction effects)
+set.seed(2355)
+incarcerations_split <- initial_split(clean_incarcerations, prop = 0.8)
+
+incarcerations_train <- training(incarcerations_split)
+incarcerations_test <- testing(incarcerations_split)
+
+
+incarcerations_model <- lm(black_jail_pop ~ black_pop_15to64 * urbanicity_binary * region, data = incarcerations_train) 
+tidy(incarcerations_model) %>% select(term, estimate)
+
+glance(incarcerations_model) %>% select(r.squared, adj.r.squared)
+
+incarcerations_pred <- predict(incarcerations_model, newdata = incarcerations_test) %>%
+  bind_cols(incarcerations_test %>% select(black_jail_pop)) %>%
+  rename(pred = ...1)
+rmse(incarcerations_pred, truth = black_jail_pop, estimate = pred)
+```
+
+The first main effects model used `black_jail_pop` as the response variable, and `division`, `total_pop`, and `urbanicity_binary` as predictor variables. The variable `urbancity_binary` divides the `urbanicity` variable into two categories: urban and rural. From testing the data, we received a value of `0.649` for the adjusted r^2 value and `215.412` for the root mean square error(Rmse). 
+
+The second main effects model also used `black_jail_pop` as the response variable, and the variables `black_pop_15to64, `urbanicity_binary`, and `region` as predictors. From testing the data, we got `0.839` as the adjusted r^2 value and `167.161` as the Rmse.
+
+We selected second main effects model to proceed with as it had a higher value for adjusted r^2 and a lower Rmse.  Next, we compared the second main effects model with an interaction effects model with the same variables.  Testing the interaction effects model returned 0.866 for the adjusted r^2 value and 155.22 for the Rmse. We decided to fit the linear model to the main effects model because the small differences in the adjusted r^2 and Rmse values was not enough to justify the added complexity of an interaction effects model. 
+
+```{r, echo = FALSE, message = FALSE}
+incarcerations_fit <- lm(black_jail_pop ~  black_pop_15to64 + urbanicity_binary + region, data =  clean_incarcerations)
+tidy(incarcerations_fit) %>%
+  select(term, estimate)
+```
+
+`^black_jail_pop` = 1.212 + 0.008 * `black_pop_15to64` + 73.178 * `urbanicity_binaryUrban` + 48.173 * `regionNortheast` + 32.959 * `regionSouth` + 17.577*`regionWest`
+
+
+The intercept of the model is 1.212, meaning that if a county has a black population (15-64) of 0, is in a rural area, and is located in the Midwest; then the black prison population will be 1.212. 0.008 is the slope of `black_pop_15to64`; so holding every thing else constant, increasing the `black_pop_15to64` by 1, increases the `black_jail_pop`  by 0.008. The slope of ` urbanicity_binaryUrban` is 73.178; holding everything else constant, when a county is in an Urban location, the `black_jail_pop` increases by 73.178. 48.173 is the slope of ` regionNortheast`; holding everything else constant, if a county is in the NorthEast region of the United States, the `black_jail_pop` increases by 48.173. The slope of ` regionSouth` is 32.959, meaning that if all other variables are held constant, if a county is in the Southern region of the United States, the ` black_jail_pop` increases by 32.959. The slope of ` regionWest` is 17.577; holding everything else constant, if a county is in the West, the ` black_jail_pop` increases by 17.577. 
+
+
+### Does urbanicity affect incarceration rate?
+In answering our general research question, whether race and incarceration are independent of each other, we wanted to see if this relationship between incarceration and race is affected by urbanicity. In order to test the relationship, we created a hypothesis that asks whether urbanicity and incarceration by race are dependent variables. With our hypothesis, we tested the null hypothesis, created a visualization for our hypothesis, and calculated the confidence intervals for each race in urban counties. 
+
+**Null Hypothesis**
+```{r urban prop, include=FALSE, message=FALSE}
+# calculating urbanicity proportions
+urban_prop <- incarcerations %>%
+  count(urbanicity) %>%
+  mutate(prop=n/sum(n))
+```
+
+```{r testing null hypothesis, include=FALSE, message=FALSE}
+# filtering df 
+filter_incarc <- clean_incarcerations %>% 
+  mutate(urban = ifelse(urbanicity == "urban", "yes", "no") ) %>%
+  mutate(race = case_when(black_jail_pop > white_jail_pop ~ "black",
+                         black_jail_pop < white_jail_pop ~ "white"))
+
+# calculating null proportions
+null_prop <- filter_incarc %>%
+  filter(!is.na(urban), !is.na(race)) %>%
+   count(urban, race) %>%
+  group_by(urban) %>%
+   mutate(prop=n/sum(n))
+
+# calculating difference in proportions
+obs_1 <- null_prop %>%
+  filter(urban == "no", race == "black") %>%
+  pull(prop)
+
+obs_2 <- null_prop %>%
+  filter(urban == "yes", race == "black") %>%
+  pull(prop)
+
+obs_diff <- obs_1 / obs_2
+
+# calculating null distribution
+set.seed(2638678)
+
+null_dist <- filter_incarc %>%
+  specify(race ~ urban, success = "black") %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 100, type = "permute") %>%
+  calculate(stat = "diff in props",
+            order = c("yes", "no"))
+
+# calculating p-value
+null_dist %>%
+  get_p_value(obs_stat = obs_diff, direction = "greater")
+
+```
+
+```{r null visualization, echo=FALSE, message=FALSE}
+# visualization
+null_dist %>% visualise() +
+  shade_p_value(obs_stat = obs_diff, direction = "greater") +
+  labs(title="Simulation-Based Null Distribution",
+       x="Difference in Proportions")
+```
+
+In order to determine whether or not we can reject the null hypothesis, we calculated and visualized the null distribution and calculated the p-value. This null hypothesis test required creating two new variables from `urbanicity`, `whtie_jail_pop`, and `black_jail_pop` in the dataset. The first new variable, `urban`, determined whether the county was urban or not (rural, small/mid, or suburban). The second variable, `bgw`, determined whether `black_jail_pop` was greater than `white_jail_pop` or not in a given county. `black` indicated that the `black_jail_pop` was greater than the `white_jail_pop` in that county, and `white` indicated that the `white_jail_pop` was greater than the `black_jail_pop` in that county. Overall these two new variables made it possible to separate the data among two categories within urban counties and other counties. The difference in proportions was calculated from the prop of `black` (greater black jail population than white jail population) in urban counties and other counties. Based on the null distribution, there is a p-value of 0 which indicates that urbanicity and incarceration by race are dependent variables. 
+
+**Visualization**
+```{r visualization, echo=FALSE, message=FALSE}
+# filtering df
+urban <- c("rural", "urban", "small/mid", "suburban")
+
+filter_incarc_df <- incarcerations %>%
+  filter(urbanicity %in% urban, year >= "1985") %>%
+  mutate(urban = case_when(   
+           urbanicity == "rural" | urbanicity == "small/mid" ~ "Rural",
+           urbanicity == "suburban" | urbanicity == "urban" ~ "Urban")) %>%
+  group_by(urban) %>%
+  summarize(white = mean(white_jail_pop, na.rm=T),
+            black = mean(black_jail_pop, na.rm=T)) %>%
+  pivot_longer(cols = 2:3, names_to = "Race", values_to = "population")
+  
+
+# ggplot visualization
+ggplot(data=filter_incarc_df,
+       mapping = aes(x=urban, y=population, fill=Race)) +
+         geom_bar(stat="identity", position="dodge") +
+  scale_fill_manual(breaks = c("black", "white"),
+                    values=c("#0492C2", "#52B2BF")) +
+  labs(title="Black vs White Incarcerated Population in 2006",
+       subtitle="Divided by Urbanicity",
+       x="Urbanicity",
+       y="Incarcerated Population",
+       fill="Race")
+```
+
+After rejecting the null hypothesis, we visualized the connection between urbanicity and rate of incarceration by race. We combined small/mid and rural into `rural`, and urban/suburban in `urban`, by doing so, we were able to create a visualization with average jail populations separated by urbanicity and race. Our visualization is concurrent with the proportions we calculated in our null hypothesis test because it is apparent that the average black jail population in urban counties are significantly higher than the white jail population. The opposite is true for rural counties. This difference in rate of incarceration separated by race in urban and rural counties indicates that `urbanicity` and `race` are dependent variables. 
+
+**Confidence Level**
+```{r data filter, include=FALSE, message=FALSE}
+urban_filter <- clean_incarcerations %>%
+  filter(urbanicity == "urban")
+```
+
+```{r black confidence level, include=FALSE, message=FALSE}
+set.seed(276)
+
+# bootstrapping black jail population
+boot_mean_black <- urban_filter %>% 
+  specify(response = black_jail_pop) %>% 
+  generate(reps=1000, type="bootstrap") %>%
+  calculate(stat="mean")
+
+# calculating confidence interval
+boot_mean_black %>%
+  get_confidence_interval(level=0.99)
+```
+
+```{r black, echo=FALSE, message=FALSE}
+# visualization
+boot_mean_black %>% visualize() +
+  labs(title="Simulation-Based Bootstrap Distrbution for Black Incarceration")
+```
+
+```{r white confidence level, include=FALSE, message=FALSE}
+set.seed(276)
+
+# bootstrapping white jail population
+boot_mean_white <- urban_filter %>% 
+  specify(response = white_jail_pop) %>% 
+  generate(reps=1000, type="bootstrap") %>%
+  calculate(stat="mean")
+
+# calculating confidence interval
+boot_mean_white %>%
+  get_confidence_interval(level=0.99)
+```
+
+```{r white, echo=FALSE, message=FALSE}
+# visualization
+boot_mean_white %>% visualize() +
+  labs(title="Simulation-Based Bootstrap Distrbution for White Incarceration")
+```
+
+By calculating the confidence intervals for `black_jail_pop` and `white_jail_pop` in urban counties, we were able to find that 1315.186 to 2328.748 incarcerated individuals in urban counties are black and 811.4496 to 1381.816 incarcerated individuals are white which is lower than rate of black incarceration. We calculated the confidence intervals for both `black_jail_pop` and `white_jail_pop` at a 99% confidence interval. While these two confidence intervals are large ranges, they are reasonable since population varies among counties. The confidence intervals are also conclusive with our hypothesis that incarceration by race and urbanicity are related.
+
+### Do red states have a higher proportion of black jail population?
+
+**Null Hypothesis**
+
+Based on one of our other research questions, "Does urbanicity affect incarceration rate?" we discovered that the variables urbanicity and incarceration by race are dependent to each other. As well as there is higher proportion of black jail population than white jail population in urban countries. Which led us to wonder if the political party of state would affect the proportion of jail population.
+
+In order to further research our question, we decided to test the null hypothesis. We created a null hypothesis that asked whether both state politcal party and incarcerated population by state were independent. To test our null hypothesis, we decided create two new variables `race`, when `black_jail_pop` is greater than `white_jail_pop` it would known as `black` , and if it was `black_jail_pop` is less than `white_jail_pop` it would be known as `white`, similar to what we had used in our urbanicity research analysis. We also created a variable that determined whether the state was a red state or a blue state based on the 2006 election stats. 
+
+```{r, include=FALSE, message=FALSE}
+nclean_incarcerations <- clean_incarcerations %>% 
+    mutate(race = case_when(black_jail_pop > white_jail_pop ~ "black",
+                            black_jail_pop < white_jail_pop ~ "white")) %>%
+    mutate(rvb = case_when(   
+           state == "AL" | state == "AK" | state == "AZ" | state == "AR" | 
+             state == "CO" | state == "FL" | state == "GA" | state == "ID" | 
+             state == "IN" | state == "IA" | state == "KS" | state == "KY" |
+             state == "MS" | state == "MO" | state == "NE" | state == "NV" | 
+             state == "NM" | state == "NC" | state == "ND" | state == "OH" |
+             state == "OK" | state == "SC" | state == "SD" | state == "TN" |
+             state == "TX" | state == "UT" | state == "VA" | state == "WV" |
+             state == "WY" ~ "red",
+           state == "CA" | state == "CT" | state == "DE" | state == "DC" | 
+             state == "HI" | state == "IL" | state == "ME" | state == "MD" |
+             state == "MA" | state == "MI" | state == "MN" | state == "NH" | 
+             state == "NJ" | state == "NY" | state == "OR" | state == "PA" | 
+             state == "IR" | state == "VT" | state == "WA" | state == "WI"  ~ "blue"))
+
+```
+
+
+```{r, message=FALSE, echo=FALSE, warning = FALSE}
+n2 <- nclean_incarcerations %>%
+  filter(rvb == "red")
+
+null_prop_diff <- n2 %>% 
+  count(race) %>%
+  mutate(prop = n/sum(n)) %>%
+  filter(race == "black") %>%
+  pull(prop)
+
+set.seed(2533)
+null_dist <- nclean_incarcerations %>%
+  specify(response = race, success = "black") %>%
+  hypothesize(null = "point", p = 0.2068815) %>%
+  generate(reps = 100, type = "draw") %>%
+  calculate(stat = "prop")
+
+null_dist %>% visualize() +
+  shade_p_value(obs_stat = null_prop_diff, direction = "both")
+```
+
+```{r, message=FALSE, echo=FALSE}
+null_dist %>%
+  get_p_value(obs_stat = null_prop_diff, direction = "both")
+```
+
+Based on our null distribution and visualization, it is apparent that the p-value of 0.74 is too high to reject the null hypothesis. Our conclusion at a 5% level of significance is that the two variables, `race`(incarceration proportions by race) and `rvb` (red vs blue state), are not dependent of each other. This prompted the end of our research because the variables used to determine the states political party are not significant enough to be related to incarceration rates.
+
+## Conclusion
+**Since person did our own separate analysis of the data we decided to write a separate summary for each section**
+
+**Hypothesis Testing for the South Region Jail Population**
+
+There was a variable called Region in the data set. Which contains Midwest, Northeast, South, and West. After seeing this variable, it eager us to find out which region has the highest jail population in the entire country. To be more specific, we are interested to know more about the South region of the United States due to its complex history and what has happened in the past that might contribute to its jail population. And we wanted to test whether or not the jail population in the South region is accounting for 40% of the whole country's jail population.
+
+Our null hypothesis suggested that the jail population in the South is exactly 40%. And our alternative hypothesis claimed that the jail population in the South region is greater than 40%. We found that 69.678 is the total jail population in the South, while the jail population of the others 3 regions combined was 84.133 people. And the proportion of the jail population in the South region was ~45%. By using the hypothesis testing method, we were able to visualize the null distribution. And our p-value turned out to be 0. Which means that the data set is supporting the alternative hypothesis, and confirmed the jail population in the South region is accounting for more than 40% of the jail population in the United States.
+
+**Linear Model Summary**
+
+In our exploration of the variable `black_jail_pop` through a linear model, we were able to gleam some insight into contributing factors to the black incarcerated population in the United States. Out of the predictor variables that we included in our model, the top two contributing predictor variables were `urbanicity_binaryUrban`, with a coefficient of 73.178 and `regionNortheast`, with a coefficient of 48.173. So, this means that the black jail population in a country in the United States is most increased if the county is urban and in the Northeast. Alleviating the root causes of these main contributing predictors to the black jail population in the United States could be a pivotal step in combating racial inequality in the justice system. In the future, I would like to obtain a similar data set with more categorical variables to compare and test more linear models and hopefully obtain a more accurate model. 
+
+**Urbanicity vs Incarceration by Race**
+
+From our research, we found that urbanicity does in fact explain incarceration rates by race. In the two tests and one visualization we created, each resulted in a trend that describes our reserach question. The null hypothesis test gave us a p-value of 0 which allowed us to reject the null hypothesis. Running the null hypothesis test also gave us the proportion of black vs white in urban counties. Roughly 72% of urban counties had a higher black incarceration rate compared to the white incarceration rate. We then created a visualization using the average `black_jail_pop ` and the average `white_jail_pop` which was also conclusive with the proportions calculated in the null hypothesis test. Even though our dodged bar chart was enough to show that urbanicity and incarceration by race are related, we still wanted to calculate how many individuals, on average, are incarcerated to see how many more black individuals are incarcerated. By finding the confidence interval for each race in urban counties, we found that there is a trend of up to 1000 more black individuals incarcerated in urban counties compared to white individuals. Overall, we were able to answer our question that both urbanicity and incarceration by race are dependent variables.
+
+**Political Party vs Incarceration**
+
+Generating two different variables using the `case_when` function, we were able to separate the states by their political party and the races by the proportion of black to white incarceration. With using these variables in our research, we found that there is in fact no connection between these variables. We ran the hypothesis test and receive a p-value of 0.74 which meant that there is a likelihood of 74% of the data could have occurred under the null hypothesis. We also created a visualization of the null distribution and shaded in the p-value from both sides. Since a majority of the distribution was shaded in from both sides, it was conclusive that the two variables were independent of each other. In conclusion, we found that proportion of incarceration by race and state political party are not related to one another. 
+
+**Data Summary**
+
+We feel that the dataset we used is relatively reliable as it was compiled using the government datasets compiled by the Bureau of Justice Statistics (BJS). The two data sets compiled in this data set are The Census of Jails and the Annual Survey of Jails. However, a non-governmental non-profit called, Vera Institute of Justice, compiled the data and they made have made small mistakes doing so. 
+
+
